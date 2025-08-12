@@ -1,0 +1,211 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Manaus Seguro — Mobile 9:16</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<style>
+  :root{/*bg:#f0f2f5;--card:#fff;--muted:#6b7280;--accent:#ff6b3d*/}
+  html,body{height:100%;margin:0;background:var(--bg);font-family:Inter,system-ui,Arial,sans-serif;color:#111}
+  .frame{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box}
+  .viewport{ width: calc(min(420px,92vw)); aspect-ratio:9/16; background:#fff; border-radius:12px; position:relative; box-shadow:0 12px 30px rgba(0,0,0,0.12); overflow:hidden}
+  header{height:56px;display:flex;align-items:center;gap:12px;padding:8px 12px;background:linear-gradient(180deg,#fff,#fbfbfd); box-sizing:border-box}
+  .logo{width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,#ffd479,var(--accent));display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800}
+  .title{font-size:15px;font-weight:800}
+  .subtitle{font-size:11px;color:var(--muted);margin-top:2px}
+
+  /* map area with thin gray border */
+  .map-wrap{position:absolute;left:8px;right:8px;top:64px;bottom:12px;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+  #map{width:calc(100% - 8px); height: calc(100% - 8px); border:1px solid #cfcfcf; border-radius:8px; box-sizing:border-box}
+
+  /* controls */
+  #dangerBtn{position:absolute;right:16px;top:74px;background:#b30000;color:#fff;padding:10px 12px;border:none;border-radius:6px;cursor:pointer;z-index:1400;font-weight:700}
+  #toggleRed{position:absolute;left:16px;top:74px;background:#fff;color:#b30000;padding:8px 10px;border:1px solid #efefef;border-radius:6px;cursor:pointer;z-index:1400}
+
+  /* news box */
+  #newsBox{position:absolute;left:50%;transform:translateX(-50%);bottom:22px;background:var(--card);padding:10px;border-radius:8px;width:86%;max-width:420px;box-shadow:0 10px 30px rgba(0,0,0,0.12);z-index:1400;display:none}
+  #newsBox h4{margin:0 0 6px 0;font-size:15px}
+  .newsItem{padding:6px 4px;margin-bottom:6px;border:1px solid #f0f2f5;border-radius:6px;background:#fff}
+  .newsItem a{color:#0b5ed7;text-decoration:none;font-size:13px}
+  .newsItem .meta{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+
+  .info{position:absolute;left:12px;bottom:12px;color:var(--muted);font-size:12px;z-index:1100}
+  .spinner{width:18px;height:18px;border:3px solid #eee;border-top-color:#0b84ff;border-radius:50%;animation:spin 1s linear infinite;display:inline-block;vertical-align:middle;margin-left:8px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  @media (max-width:420px){ .viewport{ width:92vw } }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="viewport" role="application" aria-label="Manaus Seguro 9:16">
+      <header>
+        <div class="logo">MS</div>
+        <div>
+          <div class="title">Manaus Seguro</div>
+          <div class="subtitle">Mapa — teste móvel (9:16)</div>
+        </div>
+      </header>
+
+      <div class="map-wrap"><div id="map" aria-label="Mapa interativo"></div></div>
+
+      <button id="toggleRed">Mostrar áreas vermelhas</button>
+      <button id="dangerBtn" aria-haspopup="true">É perigoso aqui?</button>
+
+      <div id="newsBox" aria-live="polite" aria-atomic="true">
+        <h4>Notícias locais</h4>
+        <div id="newsList"></div>
+      </div>
+
+      <div class="info">Toque em "É perigoso aqui?" para buscar notícias reais (GNews). <span id="loading" style="display:none" class="spinner"></span></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+  <script>
+    // Config mapa e limites
+    const CENTER = [-3.119028, -60.021731];
+    const SOUTH = -3.35, NORTH = -2.95, WEST = -60.20, EAST = -59.80;
+    const bounds = [[SOUTH, WEST], [NORTH, EAST]];
+
+    const map = L.map('map', {
+      center: CENTER,
+      zoom: 13,
+      minZoom: 12,
+      maxZoom: 17,
+      maxBounds: bounds,
+      zoomControl: true,
+      attributionControl: false
+    });
+    map.on('drag', () => map.panInsideBounds(bounds, { animate:false }));
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+    // Sample data for red areas (rates + infra)
+    const SAMPLE_RATES = [
+      { bairro: 'Compensa', lat:-3.095, lng:-60.055, rate:43.5 },
+      { bairro: 'Santo Antônio', lat:-3.098, lng:-60.035, rate:29.9 },
+      { bairro: 'Nova Esperan\u00e7a', lat:-3.11, lng:-60.06, rate:58.3 },
+      { bairro: 'Centro', lat:-3.134, lng:-60.012, rate:52.9 },
+      { bairro: 'Adrian\u00f3polis', lat:-3.089, lng:-60.042, rate:24.6 }
+    ];
+    const SAMPLE_INFRA = [
+      { bairro:'Compensa', infra:40 },
+      { bairro:'Santo Antônio', infra:60 },
+      { bairro:'Nova Esperan\u00e7a', infra:25 },
+      { bairro:'Centro', infra:50 },
+      { bairro:'Adrian\u00f3polis', infra:75 }
+    ];
+
+    function computeRiskScores(){
+      const maxRate = Math.max.apply(null, SAMPLE_RATES.map(function(r){return r.rate;}));
+      const infraMap = {}; SAMPLE_INFRA.forEach(function(i){ infraMap[i.bairro]=i.infra; });
+      return SAMPLE_RATES.map(function(b){
+        const normRate = b.rate / (maxRate || 1);
+        const infra = infraMap[b.bairro] || 50;
+        const infraRisk = 1 - (infra/100);
+        const risk = 0.7*normRate + 0.3*infraRisk;
+        return Object.assign({}, b, {{'normRate':normRate,'infra':infra,'infraRisk':infraRisk,'riskScore':risk}});
+      });
+    }
+
+    function colorForRisk(score){
+      if(score>=0.7) return '#a50f15';
+      if(score>=0.5) return '#de2d26';
+      if(score>=0.3) return '#fb6a4a';
+      return '#fcae91';
+    }
+
+    const redLayer = L.layerGroup().addTo(map);
+    let redShown = false;
+
+    function renderRedAreas(threshold=0.4){
+      redLayer.clearLayers();
+      const scores = computeRiskScores();
+      scores.forEach(function(s){
+        if(s.riskScore >= threshold){
+          const color = colorForRisk(s.riskScore);
+          const radius = 300 + (s.normRate*800);
+          L.circle([s.lat,s.lng], { color: color, fillColor:color, fillOpacity:0.45, weight:0.6, radius: radius }).bindPopup('<strong>'+s.bairro+'</strong><br>Taxa: '+s.rate+'<br>Infra: '+s.infra).addTo(redLayer);
+        }
+      });
+    }
+
+    document.getElementById('toggleRed').addEventListener('click', function(){
+      redShown = !redShown;
+      if(redShown){ renderRedAreas(0.4); document.getElementById('toggleRed').textContent='Ocultar áreas vermelhas'; }
+      else { redLayer.clearLayers(); document.getElementById('toggleRed').textContent='Mostrar áreas vermelhas'; }
+    });
+
+    // region groups (4 bairros each)
+    const regionGroups = {
+      "oeste_1": { name:"Zona Oeste (Compensa, Santo Antônio, Nova Esperança, Cidade Nova)", bbox:[-3.00,-60.11,-3.14,-59.98], neighborhoods:["Compensa","Santo Antônio","Nova Esperança","Cidade Nova"] },
+      "oeste_2": { name:"Ponta Negra / Vizinhança (Ponta Negra, Parque das Artes, Alvorada, Novo Israel)", bbox:[-3.06,-60.10,-3.16,-59.94], neighborhoods:["Ponta Negra","Parque das Artes","Alvorada","Novo Israel"] },
+      "centro": { name:"Centro / Adjacentes (Centro, Adrianópolis, Praça 14, Dom Pedro)", bbox:[-3.10,-60.03,-3.16,-59.98], neighborhoods:["Centro","Adrianópolis","Praça 14","Dom Pedro"] },
+      "norte_1": { name:"Zona Norte (Cidade Nova, Cidade de Deus, Colônia Oliveira, São José)", bbox:[-2.97,-60.13,-3.05,-60.00], neighborhoods:["Cidade Nova","Cidade de Deus","Colônia Oliveira","São José"] },
+      "sul_1": { name:"Zona Sul (São Jorge, Parque 10, Flores, Puraquequara)", bbox:[-3.08,-60.05,-3.20,-59.95], neighborhoods:["São Jorge","Parque 10","Flores","Puraquequara"] }
+    };
+
+    function inBBox(lat, lng, bbox){
+      var latTop = bbox[0], lngLeft = bbox[1], latBottom = bbox[2], lngRight = bbox[3];
+      var maxLat = Math.max(latTop, latBottom), minLat = Math.min(latTop, latBottom);
+      var minLng = Math.min(lngLeft, lngRight), maxLng = Math.max(lngLeft, lngRight);
+      return (lat <= maxLat && lat >= minLat && lng >= minLng && lng <= maxLng);
+    }
+    function detectRegionGroup(lat,lng){
+      for(var key in regionGroups){ var g=regionGroups[key]; if(inBBox(lat,lng,g.bbox)) return key; } return null;
+    }
+
+    // GNews API (client-side) - WARNING: key visible in client
+    const GNEWS_KEY = "487998612e6d3a985aa5578badddf7e2";
+    const GNEWS_ENDPOINT = "https://gnews.io/api/v4/search";
+
+    function isoDateYearsAgo(years){ var d=new Date(); d.setFullYear(d.getFullYear()-years); return d.toISOString().split('T')[0]; }
+
+    async function fetchNewsForQuery(q){
+      var fromDate = isoDateYearsAgo(3);
+      var params = new URLSearchParams({ q:q, lang:'pt', country:'br', max:'8', from: fromDate, token: GNEWS_KEY });
+      var url = GNEWS_ENDPOINT + "?" + params.toString();
+      var res = await fetch(url);
+      if(!res.ok){ throw new Error('GNews erro: '+res.status); }
+      var data = await res.json();
+      return data.articles || [];
+    }
+
+    var dangerBtn = document.getElementById('dangerBtn');
+    var newsBox = document.getElementById('newsBox');
+    var newsList = document.getElementById('newsList');
+    var loading = document.getElementById('loading');
+
+    dangerBtn.addEventListener('click', async function(){
+      newsList.innerHTML=''; newsBox.style.display='block'; loading.style.display='inline-block';
+      var c = map.getCenter(); var regionKey = detectRegionGroup(c.lat, c.lng);
+      var neighborhoods = ['Manaus']; var label='Manaus';
+      if(regionKey){ neighborhoods = regionGroups[regionKey].neighborhoods; label = regionGroups[regionKey].name; }
+      var header = document.createElement('div'); header.className='newsItem'; header.innerHTML='<strong>Buscando notícias para:</strong><br/><span class="meta">'+label+'</span>'; newsList.appendChild(header);
+
+      try{
+        for(var i=0;i<neighborhoods.length;i++){
+          var nb = neighborhoods[i];
+          var query = nb + ' Manaus assalto OR furto OR homicídio OR acidente';
+          var articles = await fetchNewsForQuery(query);
+          if(articles.length===0){ var div=document.createElement('div'); div.className='newsItem'; div.textContent='Nenhuma notícia recente encontrada para '+nb+'.'; newsList.appendChild(div); }
+          else{
+            var slice = articles.slice(0,3);
+            slice.forEach(function(a){ var div=document.createElement('div'); div.className='newsItem'; var meta=document.createElement('span'); meta.className='meta'; meta.textContent = new Date(a.publishedAt).toLocaleDateString(); var link=document.createElement('a'); link.href=a.url; link.target='_blank'; link.rel='noopener noreferrer'; link.textContent=a.title; div.appendChild(meta); div.appendChild(link); newsList.appendChild(div); });
+          }
+        }
+      }catch(err){
+        var div=document.createElement('div'); div.className='newsItem'; div.textContent='Erro ao buscar notícias: '+err.message; newsList.appendChild(div);
+      }finally{ loading.style.display='none'; }
+
+      setTimeout(function(){ newsBox.style.display='none'; }, 60000);
+    });
+
+    map.on('click', function(){ newsBox.style.display='none'; });
+    window.addEventListener('resize', function(){ map.invalidateSize(); });
+  </script>
+</body>
+</html>
